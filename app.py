@@ -62,8 +62,10 @@ def _call_gemini(prompt, image):
         contents=[
             prompt,
             {
-                "mime_type": "image/png",
-                "data": image_bytes,
+                "inline_data": {
+                    "mime_type": "image/png",
+                    "data": image_bytes,
+                }
             },
         ],
     )
