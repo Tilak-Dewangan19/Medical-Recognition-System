@@ -126,3 +126,23 @@ def test_gen_image_uses_openrouter_when_configured(monkeypatch):
     result = app_module.gen_image("describe this image", image)
 
     assert result == "openrouter response"
+
+
+def test_server_config_defaults_to_deployment_safe_values(monkeypatch):
+    monkeypatch.delenv("HOST", raising=False)
+    monkeypatch.delenv("PORT", raising=False)
+
+    config = app_module.get_server_config()
+
+    assert config["host"] == "0.0.0.0"
+    assert config["port"] == 5000
+    assert config["debug"] is False
+
+
+def test_analysis_prompt_requests_general_visual_description():
+    prompt = app_module.get_analysis_prompt()
+
+    assert "non-diagnostic" in prompt.lower()
+    assert "visual description" in prompt.lower()
+    assert "medical professional" in prompt.lower()
+    assert "review the image" in prompt.lower()

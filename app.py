@@ -159,16 +159,28 @@ def validate(prompt):
     return "No"
 
 
+def get_server_config():
+    return {
+        "host": os.getenv("HOST", "0.0.0.0"),
+        "port": int(os.getenv("PORT", "5000")),
+        "debug": False,
+    }
+
+
+def get_analysis_prompt():
+    return (
+        "You are analyzing an uploaded medical image. Provide a detailed but non-diagnostic visual description "
+        "of the image contents. Describe visible structures, patterns, textures, landmarks, or abnormalities "
+        "in a clear way that could help a clinician or user understand what is shown. If the image is an X-ray, "
+        "ultrasound, MRI, wound, scan, or other medical image, mention the most relevant visible features and "
+        "note that a qualified medical professional should review the image for interpretation."
+    )
+
+
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
-        image_prompt = '''
-                - Generate a very detailed medical description for the given image.
-                - Identify and describe any relevant medical conditions, anomalies, or abnormalities present in the image.
-                - Additionally, provide insights into any potential treatments or recommended actions based on the observed medical features.
-                - Please ensure the generated content is accurate and clinically relevant.
-                - Please don't provide false and misleading information.
-                '''
+        image_prompt = get_analysis_prompt()
 
         uploaded_file = request.files.get('file')
         if not uploaded_file or uploaded_file.filename == '':
@@ -225,4 +237,4 @@ def index():
     return render_template('index.html')
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(**get_server_config())
