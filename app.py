@@ -42,6 +42,15 @@ OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini").strip() o
 vis_model = None
 gemini_client = None
 
+
+def _has_openrouter_config():
+    cleaned = (OPENROUTER_API_KEY or "").strip()
+    if not cleaned:
+        return False
+    if cleaned in {"...", "your_openrouter_api_key", "your_key_here"}:
+        return False
+    return True
+
 if API_KEY:
     if google_genai is not None:
         try:
@@ -74,7 +83,7 @@ def _image_to_bytes(image):
 
 
 def _call_openrouter(prompt, image):
-    if not OPENROUTER_API_KEY:
+    if not _has_openrouter_config():
         return None
 
     try:
@@ -125,20 +134,19 @@ def _call_openrouter(prompt, image):
 
 # Function to generate content
 def gen_image(prompt, image):
-    if not API_KEY and not OPENROUTER_API_KEY:
+    if not _has_openrouter_config() and not API_KEY:
         return None
 
-    if not API_KEY and OPENROUTER_API_KEY:
+    if _has_openrouter_config():
         try:
-            return _call_openrouter(prompt, image)
+            response_text = _call_openrouter(prompt, image)
+            if response_text:
+                return response_text
         except Exception:
-            return None
+            pass
 
-    if (vis_model is None and gemini_client is None and OPENROUTER_API_KEY):
-        try:
-            return _call_openrouter(prompt, image)
-        except Exception:
-            return None
+    if not API_KEY:
+        return None
 
     max_retries = 3
     backoff = 1
@@ -279,19 +287,7 @@ def index():
         except Exception:
             return render_template('index.html', response_text="The uploaded file is not a valid image. Please try another file or convert a DICOM/X-ray scan to JPG or PNG.")
 
-        if not API_KEY and not OPENROUTER_API_KEY:
-            return render_template('index.html', response_text="Gemini API is not configured. Please set GOOGLE_API_KEY in the environment or .env file.", image_url=image_url)
-
-        if (not API_KEY or vis_model is None) and OPENROUTER_API_KEY:
-            try:
-                response_text = _call_openrouter(image_prompt, image)
-            except Exception as exc:
-                return render_template('index.html', response_text=f"OpenRouter fallback failed. Please try again. ({exc})", image_url=image_url)
-            if response_text:
-                return render_template('index.html', response_text=response_text, image_url=image_url)
-            return render_template('index.html', response_text="The image could not be processed right now. Please try again.", image_url=image_url)
-
-        if not API_KEY or vis_model is None:
+        if not _has_openrouter_config() and not API_KEY:
             return render_template('index.html', response_text="Gemini API is not configured. Please set GOOGLE_API_KEY in the environment or .env file.", image_url=image_url)
 
         try:

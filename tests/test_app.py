@@ -51,6 +51,7 @@ def test_upload_returns_generated_result_even_when_validation_says_no(monkeypatc
 def test_upload_shows_configuration_message_when_api_key_is_missing(monkeypatch):
     client = app_module.app.test_client()
     monkeypatch.setattr(app_module, "API_KEY", "")
+    monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "")
 
     img_bytes = io.BytesIO()
     Image.new("RGB", (32, 32), color="blue").save(img_bytes, format="PNG")
