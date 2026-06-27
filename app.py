@@ -1,4 +1,3 @@
-import base64
 import io
 import os
 from pathlib import Path
@@ -21,40 +20,17 @@ except Exception:
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 
-OPENROUTER_API_KEY = None
-OPENROUTER_MODEL = None
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 
 
-def _get_openrouter_settings():
-    global OPENROUTER_API_KEY, OPENROUTER_MODEL
-
-    api_key = globals().get("OPENROUTER_API_KEY")
-    if api_key is None:
-        api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
-    else:
-        api_key = str(api_key).strip()
-
-    model = globals().get("OPENROUTER_MODEL")
-    if model is None:
-        model = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini").strip() or "openai/gpt-4o-mini"
-    else:
-        model = str(model).strip() or "openai/gpt-4o-mini"
-
-    return api_key, model
-
-
-def _has_openrouter_config():
-    api_key, _ = _get_openrouter_settings()
-    cleaned = (api_key or "").strip()
+def _has_gemini_config():
+    cleaned = (GOOGLE_API_KEY or "").strip()
     if not cleaned:
         return False
-    if cleaned in {"...", "your_openrouter_api_key", "your_key_here"}:
-        return False
-    if cleaned.startswith("sk-or") and len(cleaned) < 20:
+    if cleaned in {"...", "your_google_api_key", "your_key_here", "GOOGLE_API_KEY"}:
         return False
     if "..." in cleaned:
-        return False
-    if cleaned.startswith("sk-or") and "v1-" in cleaned and len(cleaned) < 40:
         return False
     return True
 
@@ -67,74 +43,42 @@ BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / 'static' / 'uploads'
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-def _image_to_bytes(image):
-    buffer = io.BytesIO()
-    image_format = getattr(image, "format", None) or "PNG"
-    image.save(buffer, format=image_format)
-    return buffer.getvalue()
-
-
-def _call_openrouter(prompt, image):
-    if not _has_openrouter_config():
+def _call_gemini(prompt, image):
+    if not _has_gemini_config():
         return None
 
-    api_key, model = _get_openrouter_settings()
-
     try:
-        import requests
-    except Exception:
-        raise RuntimeError("requests package is required for OpenRouter fallback")
+        from google import genai
+    except Exception as exc:
+        raise RuntimeError("google-genai package is required for Gemini analysis") from exc
 
-    image_bytes = _image_to_bytes(image)
-    image_b64 = base64.b64encode(image_bytes).decode("ascii")
+    client = genai.Client(api_key=GOOGLE_API_KEY)
+    image_bytes = io.BytesIO()
+    image.save(image_bytes, format=getattr(image, "format", None) or "PNG")
+    image_bytes = image_bytes.getvalue()
 
-    payload = {
-        "model": model,
-        "messages": [
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[
+            prompt,
             {
-                "role": "system",
-                "content": "You are a helpful medical image analysis assistant."
-            },
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{image_b64}"
-                        },
-                    },
-                ],
+                "mime_type": "image/png",
+                "data": image_bytes,
             },
         ],
-    }
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-
-    response = requests.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers=headers,
-        json=payload,
-        timeout=60,
     )
-    response.raise_for_status()
-    data = response.json()
-    return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+    return response.text
 
 
 # Function to generate content
 def gen_image(prompt, image):
-    if not _has_openrouter_config():
+    if not _has_gemini_config():
         return None
 
     try:
-        return _call_openrouter(prompt, image)
+        return _call_gemini(prompt, image)
     except Exception as exc:
-        raise RuntimeError(f"OpenRouter request failed: {exc}") from exc
+        raise RuntimeError(f"Gemini request failed: {exc}") from exc
 
 
 def load_image_from_upload(uploaded_file):
@@ -193,11 +137,10 @@ def get_server_config():
 
 def get_analysis_prompt():
     return (
-        "You are analyzing an uploaded medical image. Provide a detailed but non-diagnostic visual description "
-        "of the image contents. Describe visible structures, patterns, textures, landmarks, or abnormalities "
-        "in a clear way that could help a clinician or user understand what is shown. If the image is an X-ray, "
-        "ultrasound, MRI, wound, scan, or other medical image, mention the most relevant visible features and "
-        "note that a qualified medical professional should review the image for interpretation."
+        "You are analyzing an uploaded medical image. Provide a detailed, helpful medical-style description of the image contents. "
+        "Describe visible structures, patterns, textures, landmarks, or abnormalities in a clear and clinically relevant way. "
+        "If the image is an X-ray, ultrasound, MRI, wound, scan, or other medical image, mention the most relevant visible features. "
+        "Do not make a definitive diagnosis, but provide a clear description that a medical professional could use for interpretation."
     )
 
 
@@ -230,17 +173,17 @@ def index():
         except Exception:
             return render_template('index.html', response_text="The uploaded file is not a valid image. Please try another file or convert a DICOM/X-ray scan to JPG or PNG.")
 
-        if not _has_openrouter_config():
-            return render_template('index.html', response_text="OpenRouter API is not configured or the key is invalid. Please set OPENROUTER_API_KEY to a real OpenRouter key in the environment or .env file.", image_url=image_url)
+        if not _has_gemini_config():
+            return render_template('index.html', response_text="Gemini API is not configured or the key is invalid. Please set GOOGLE_API_KEY to a real Gemini key in the environment or .env file.", image_url=image_url)
 
         try:
             response_text = gen_image(image_prompt, image)
         except Exception as exc:
             message = str(exc)
             if "quota" in message.lower() or "429" in message:
-                return render_template('index.html', response_text="OpenRouter API quota exceeded. Please try again later or use a different API key.")
+                return render_template('index.html', response_text="Gemini API quota exceeded. Please try again later or use a different API key.")
             if "api key" in message.lower() or "permission" in message.lower() or "forbidden" in message.lower():
-                return render_template('index.html', response_text="OpenRouter API access failed. Please check your API key and permissions.")
+                return render_template('index.html', response_text="Gemini API access failed. Please check your API key and permissions.")
             return render_template('index.html', response_text=f"The image could not be processed right now. Please try again. ({exc})", image_url=image_url)
 
         if response_text:

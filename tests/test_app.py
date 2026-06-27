@@ -30,7 +30,7 @@ def test_dicom_extensions_are_supported():
 
 def test_upload_returns_generated_result_even_when_validation_says_no(monkeypatch):
     client = app_module.app.test_client()
-    monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "fake-key")
+    monkeypatch.setattr(app_module, "GOOGLE_API_KEY", "fake-key")
     monkeypatch.setattr(app_module, "gen_image", lambda prompt, image: "A medical description")
     monkeypatch.setattr(app_module, "validate", lambda prompt: "No")
 
@@ -50,7 +50,7 @@ def test_upload_returns_generated_result_even_when_validation_says_no(monkeypatc
 
 def test_upload_shows_configuration_message_when_api_key_is_missing(monkeypatch):
     client = app_module.app.test_client()
-    monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "")
+    monkeypatch.setattr(app_module, "GOOGLE_API_KEY", "")
 
     img_bytes = io.BytesIO()
     Image.new("RGB", (32, 32), color="blue").save(img_bytes, format="PNG")
@@ -64,17 +64,17 @@ def test_upload_shows_configuration_message_when_api_key_is_missing(monkeypatch)
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert "OPENROUTER_API_KEY" in body
+    assert "GOOGLE_API_KEY" in body
 
 
-def test_has_openrouter_config_rejects_placeholder_keys(monkeypatch):
-    monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "sk-or-v1-37b...33e")
-    assert app_module._has_openrouter_config() is False
+def test_has_gemini_config_rejects_placeholder_keys(monkeypatch):
+    monkeypatch.setattr(app_module, "GOOGLE_API_KEY", "...")
+    assert app_module._has_gemini_config() is False
 
 
-def test_upload_uses_openrouter_when_configured(monkeypatch):
+def test_upload_uses_gemini_when_configured(monkeypatch):
     client = app_module.app.test_client()
-    monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "fake-key")
+    monkeypatch.setattr(app_module, "GOOGLE_API_KEY", "fake-key")
     monkeypatch.setattr(app_module, "gen_image", lambda prompt, image: "A medical description")
 
     img_bytes = io.BytesIO()
@@ -92,9 +92,9 @@ def test_upload_uses_openrouter_when_configured(monkeypatch):
     assert "A medical description" in body
 
 
-def test_openrouter_errors_surface_clear_message(monkeypatch):
+def test_gemini_errors_surface_clear_message(monkeypatch):
     client = app_module.app.test_client()
-    monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "fake-key")
+    monkeypatch.setattr(app_module, "GOOGLE_API_KEY", "fake-key")
     monkeypatch.setattr(app_module, "gen_image", lambda prompt, image: (_ for _ in ()).throw(RuntimeError("quota exceeded")))
 
     img_bytes = io.BytesIO()
@@ -112,20 +112,20 @@ def test_openrouter_errors_surface_clear_message(monkeypatch):
     assert "quota exceeded" in body.lower() or "quota" in body.lower()
 
 
-def test_gen_image_uses_openrouter_when_configured(monkeypatch):
-    monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "openrouter-key")
-    monkeypatch.setattr(app_module, "OPENROUTER_MODEL", "openai/gpt-4o-mini")
+def test_gen_image_uses_gemini_when_configured(monkeypatch):
+    monkeypatch.setattr(app_module, "GOOGLE_API_KEY", "gemini-key")
+    monkeypatch.setattr(app_module, "GEMINI_MODEL", "gemini-2.5-flash")
 
-    def fake_call_openrouter(prompt, image):
-        return "openrouter response"
+    def fake_call_gemini(prompt, image):
+        return "gemini response"
 
-    monkeypatch.setattr(app_module, "_call_openrouter", fake_call_openrouter)
+    monkeypatch.setattr(app_module, "_call_gemini", fake_call_gemini)
 
     image = Image.new("RGB", (8, 8), color="blue")
 
     result = app_module.gen_image("describe this image", image)
 
-    assert result == "openrouter response"
+    assert result == "gemini response"
 
 
 def test_server_config_defaults_to_deployment_safe_values(monkeypatch):
@@ -142,7 +142,7 @@ def test_server_config_defaults_to_deployment_safe_values(monkeypatch):
 def test_analysis_prompt_requests_general_visual_description():
     prompt = app_module.get_analysis_prompt()
 
-    assert "non-diagnostic" in prompt.lower()
-    assert "visual description" in prompt.lower()
+    assert "medical-style description" in prompt.lower()
+    assert "visible structures" in prompt.lower()
     assert "medical professional" in prompt.lower()
-    assert "review the image" in prompt.lower()
+    assert "definitive diagnosis" in prompt.lower()
