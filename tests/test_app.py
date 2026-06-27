@@ -135,3 +135,25 @@ def test_gen_image_retries_with_fallback_model_when_quota_is_exceeded(monkeypatc
 
     assert result == "fallback response"
     assert calls == ["gemini-2.5-flash", "gemini-2.5-pro"]
+
+
+def test_gen_image_uses_openrouter_when_gemini_fails(monkeypatch):
+    monkeypatch.setattr(app_module, "API_KEY", "fake-key")
+    monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setattr(app_module, "OPENROUTER_MODEL", "openai/gpt-4o-mini")
+    monkeypatch.setattr(app_module, "vis_model", None)
+    monkeypatch.setattr(app_module, "gemini_client", None)
+    monkeypatch.setattr(app_module, "genai_types", None)
+    monkeypatch.setattr(app_module, "MODEL_NAME", "gemini-2.5-flash")
+    monkeypatch.setattr(app_module, "FALLBACK_MODEL", None)
+
+    def fake_call_openrouter(prompt, image):
+        return "openrouter fallback response"
+
+    monkeypatch.setattr(app_module, "_call_openrouter", fake_call_openrouter)
+
+    image = Image.new("RGB", (8, 8), color="blue")
+
+    result = app_module.gen_image("describe this image", image)
+
+    assert result == "openrouter fallback response"
