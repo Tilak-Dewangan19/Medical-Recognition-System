@@ -30,7 +30,7 @@ def test_dicom_extensions_are_supported():
 
 def test_upload_returns_generated_result_even_when_validation_says_no(monkeypatch):
     client = app_module.app.test_client()
-    monkeypatch.setattr(app_module, "API_KEY", "fake-key")
+    monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "fake-key")
     monkeypatch.setattr(app_module, "gen_image", lambda prompt, image: "A medical description")
     monkeypatch.setattr(app_module, "validate", lambda prompt: "No")
 
@@ -50,7 +50,6 @@ def test_upload_returns_generated_result_even_when_validation_says_no(monkeypatc
 
 def test_upload_shows_configuration_message_when_api_key_is_missing(monkeypatch):
     client = app_module.app.test_client()
-    monkeypatch.setattr(app_module, "API_KEY", "")
     monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "")
 
     img_bytes = io.BytesIO()
@@ -65,13 +64,17 @@ def test_upload_shows_configuration_message_when_api_key_is_missing(monkeypatch)
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert "GOOGLE_API_KEY" in body
+    assert "OPENROUTER_API_KEY" in body
 
 
-def test_upload_uses_gemini_when_api_key_exists(monkeypatch):
+def test_has_openrouter_config_rejects_placeholder_keys(monkeypatch):
+    monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "sk-or-v1-37b...33e")
+    assert app_module._has_openrouter_config() is False
+
+
+def test_upload_uses_openrouter_when_configured(monkeypatch):
     client = app_module.app.test_client()
-    monkeypatch.setattr(app_module, "API_KEY", "fake-key")
-    monkeypatch.setattr(app_module, "vis_model", object())
+    monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "fake-key")
     monkeypatch.setattr(app_module, "gen_image", lambda prompt, image: "A medical description")
 
     img_bytes = io.BytesIO()
@@ -89,10 +92,9 @@ def test_upload_uses_gemini_when_api_key_exists(monkeypatch):
     assert "A medical description" in body
 
 
-def test_gemini_errors_surface_clear_message(monkeypatch):
+def test_openrouter_errors_surface_clear_message(monkeypatch):
     client = app_module.app.test_client()
-    monkeypatch.setattr(app_module, "API_KEY", "fake-key")
-    monkeypatch.setattr(app_module, "vis_model", object())
+    monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "fake-key")
     monkeypatch.setattr(app_module, "gen_image", lambda prompt, image: (_ for _ in ()).throw(RuntimeError("quota exceeded")))
 
     img_bytes = io.BytesIO()
@@ -110,46 +112,12 @@ def test_gemini_errors_surface_clear_message(monkeypatch):
     assert "quota exceeded" in body.lower() or "quota" in body.lower()
 
 
-def test_gen_image_retries_with_fallback_model_when_quota_is_exceeded(monkeypatch):
-    calls = []
-
-    class FakeModels:
-        def generate_content(self, **kwargs):
-            calls.append(kwargs["model"])
-            if kwargs["model"] == "gemini-2.5-flash":
-                raise RuntimeError("429 quota exceeded")
-            return SimpleNamespace(text="fallback response")
-
-    fake_client = SimpleNamespace(models=FakeModels())
-    fake_part = SimpleNamespace(from_bytes=lambda data, mime_type: {"data": data, "mime_type": mime_type})
-
-    monkeypatch.setattr(app_module, "API_KEY", "fake-key")
-    monkeypatch.setattr(app_module, "vis_model", None)
-    monkeypatch.setattr(app_module, "gemini_client", fake_client)
-    monkeypatch.setattr(app_module, "genai_types", SimpleNamespace(Part=fake_part))
-    monkeypatch.setattr(app_module, "MODEL_NAME", "gemini-2.5-flash")
-    monkeypatch.setattr(app_module, "FALLBACK_MODEL", "gemini-2.5-pro")
-
-    image = Image.new("RGB", (8, 8), color="blue")
-
-    result = app_module.gen_image("describe this image", image)
-
-    assert result == "fallback response"
-    assert calls == ["gemini-2.5-flash", "gemini-2.5-pro"]
-
-
-def test_gen_image_uses_openrouter_when_gemini_fails(monkeypatch):
-    monkeypatch.setattr(app_module, "API_KEY", "fake-key")
+def test_gen_image_uses_openrouter_when_configured(monkeypatch):
     monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "openrouter-key")
     monkeypatch.setattr(app_module, "OPENROUTER_MODEL", "openai/gpt-4o-mini")
-    monkeypatch.setattr(app_module, "vis_model", None)
-    monkeypatch.setattr(app_module, "gemini_client", None)
-    monkeypatch.setattr(app_module, "genai_types", None)
-    monkeypatch.setattr(app_module, "MODEL_NAME", "gemini-2.5-flash")
-    monkeypatch.setattr(app_module, "FALLBACK_MODEL", None)
 
     def fake_call_openrouter(prompt, image):
-        return "openrouter fallback response"
+        return "openrouter response"
 
     monkeypatch.setattr(app_module, "_call_openrouter", fake_call_openrouter)
 
@@ -157,4 +125,4 @@ def test_gen_image_uses_openrouter_when_gemini_fails(monkeypatch):
 
     result = app_module.gen_image("describe this image", image)
 
-    assert result == "openrouter fallback response"
+    assert result == "openrouter response"

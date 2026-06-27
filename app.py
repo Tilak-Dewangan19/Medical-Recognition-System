@@ -11,18 +11,6 @@ from flask import Flask, request, render_template, url_for
 from werkzeug.utils import secure_filename
 
 try:
-    from google import genai as google_genai
-    from google.genai import types as genai_types
-except Exception:
-    google_genai = None
-    genai_types = None
-
-try:
-    import google.generativeai as genai
-except Exception:
-    genai = None
-
-try:
     import pydicom
     from pydicom import dcmread
 except Exception:
@@ -32,15 +20,8 @@ except Exception:
 # Load environment variables from .env
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
-API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()
-# Use Flash 2.5 by default to enable up-to-date multimodal processing
-MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
-FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK", "").strip() or None
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini").strip() or "openai/gpt-4o-mini"
-
-vis_model = None
-gemini_client = None
 
 
 def _has_openrouter_config():
@@ -49,22 +30,11 @@ def _has_openrouter_config():
         return False
     if cleaned in {"...", "your_openrouter_api_key", "your_key_here"}:
         return False
+    if cleaned.startswith("sk-or") and len(cleaned) < 20:
+        return False
+    if "..." in cleaned:
+        return False
     return True
-
-if API_KEY:
-    if google_genai is not None:
-        try:
-            gemini_client = google_genai.Client(api_key=API_KEY)
-            vis_model = gemini_client.models
-        except Exception:
-            gemini_client = None
-            vis_model = None
-    elif genai is not None:
-        try:
-            genai.configure(api_key=API_KEY)
-            vis_model = genai.GenerativeModel(MODEL_NAME)
-        except Exception:
-            vis_model = None
 
 app = Flask(__name__)
 
@@ -134,76 +104,13 @@ def _call_openrouter(prompt, image):
 
 # Function to generate content
 def gen_image(prompt, image):
-    if not _has_openrouter_config() and not API_KEY:
+    if not _has_openrouter_config():
         return None
 
-    if _has_openrouter_config():
-        try:
-            response_text = _call_openrouter(prompt, image)
-            if response_text:
-                return response_text
-        except Exception:
-            pass
-
-    if not API_KEY:
-        return None
-
-    max_retries = 3
-    backoff = 1
-    last_exc = None
-
-    models_to_try = [MODEL_NAME]
-    if FALLBACK_MODEL and FALLBACK_MODEL != MODEL_NAME:
-        models_to_try.append(FALLBACK_MODEL)
-
-    gemini_attempted = False
-
-    for model in models_to_try:
-        for attempt in range(1, max_retries + 1):
-            try:
-                gemini_attempted = True
-                if gemini_client is not None and genai_types is not None:
-                    image_bytes = _image_to_bytes(image)
-                    response = gemini_client.models.generate_content(
-                        model=model,
-                        contents=[
-                            prompt,
-                            genai_types.Part.from_bytes(data=image_bytes, mime_type="image/png"),
-                        ],
-                    )
-                    return getattr(response, "text", None)
-
-                try:
-                    model_inst = genai.GenerativeModel(model)
-                except Exception:
-                    model_inst = vis_model
-
-                response = model_inst.generate_content([prompt, image])
-                return getattr(response, "text", None)
-
-            except Exception as exc:
-                last_exc = exc
-                msg = str(exc).lower()
-                is_transient = any(token in msg for token in ["503", "unavailable", "high demand", "temporar", "quota", "429", "rate limit", "overloaded"])
-                if is_transient and attempt < max_retries and model == models_to_try[-1]:
-                    time.sleep(backoff)
-                    backoff *= 2
-                    continue
-                if is_transient:
-                    break
-                raise
-
-    if OPENROUTER_API_KEY and gemini_attempted:
-        try:
-            return _call_openrouter(prompt, image)
-        except Exception as exc:
-            if last_exc:
-                raise last_exc from exc
-            raise
-
-    if last_exc:
-        raise last_exc
-    return None
+    try:
+        return _call_openrouter(prompt, image)
+    except Exception as exc:
+        raise RuntimeError(f"OpenRouter request failed: {exc}") from exc
 
 
 def load_image_from_upload(uploaded_file):
@@ -287,17 +194,17 @@ def index():
         except Exception:
             return render_template('index.html', response_text="The uploaded file is not a valid image. Please try another file or convert a DICOM/X-ray scan to JPG or PNG.")
 
-        if not _has_openrouter_config() and not API_KEY:
-            return render_template('index.html', response_text="Gemini API is not configured. Please set GOOGLE_API_KEY in the environment or .env file.", image_url=image_url)
+        if not _has_openrouter_config():
+            return render_template('index.html', response_text="OpenRouter API is not configured or the key is invalid. Please set OPENROUTER_API_KEY to a real OpenRouter key in the environment or .env file.", image_url=image_url)
 
         try:
             response_text = gen_image(image_prompt, image)
         except Exception as exc:
             message = str(exc)
             if "quota" in message.lower() or "429" in message:
-                return render_template('index.html', response_text="Gemini API quota exceeded. Please try again later or use a different API key.")
+                return render_template('index.html', response_text="OpenRouter API quota exceeded. Please try again later or use a different API key.")
             if "api key" in message.lower() or "permission" in message.lower() or "forbidden" in message.lower():
-                return render_template('index.html', response_text="Gemini API access failed. Please check your API key and permissions.")
+                return render_template('index.html', response_text="OpenRouter API access failed. Please check your API key and permissions.")
             return render_template('index.html', response_text=f"The image could not be processed right now. Please try again. ({exc})", image_url=image_url)
 
         if response_text:
