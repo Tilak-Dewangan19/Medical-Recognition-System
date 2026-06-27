@@ -97,7 +97,6 @@ def gen_image(prompt, image):
                     )
                     return getattr(response, "text", None)
 
-                # Use the `genai` package model instance for dynamic model names
                 try:
                     model_inst = genai.GenerativeModel(model)
                 except Exception:
@@ -109,19 +108,15 @@ def gen_image(prompt, image):
             except Exception as exc:
                 last_exc = exc
                 msg = str(exc).lower()
-                # Retry on transient/unavailable errors (503 / high demand)
-                if "503" in msg or "unavailable" in msg or "high demand" in msg or "temporar" in msg:
-                    if attempt < max_retries:
-                        time.sleep(backoff)
-                        backoff *= 2
-                        continue
-                    else:
-                        # exhausted retries for this model, will try fallback model if any
-                        break
-                # For other errors, re-raise to let caller handle it
+                is_transient = any(token in msg for token in ["503", "unavailable", "high demand", "temporar", "quota", "429", "rate limit", "overloaded"])
+                if is_transient and attempt < max_retries and model == models_to_try[-1]:
+                    time.sleep(backoff)
+                    backoff *= 2
+                    continue
+                if is_transient:
+                    break
                 raise
 
-    # If we reach here, all attempts failed — raise the last exception
     if last_exc:
         raise last_exc
     return None

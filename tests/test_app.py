@@ -1,6 +1,7 @@
 import io
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 from PIL import Image
 
@@ -106,3 +107,31 @@ def test_gemini_errors_surface_clear_message(monkeypatch):
     assert response.status_code == 200
     body = response.get_data(as_text=True)
     assert "quota exceeded" in body.lower() or "quota" in body.lower()
+
+
+def test_gen_image_retries_with_fallback_model_when_quota_is_exceeded(monkeypatch):
+    calls = []
+
+    class FakeModels:
+        def generate_content(self, **kwargs):
+            calls.append(kwargs["model"])
+            if kwargs["model"] == "gemini-2.5-flash":
+                raise RuntimeError("429 quota exceeded")
+            return SimpleNamespace(text="fallback response")
+
+    fake_client = SimpleNamespace(models=FakeModels())
+    fake_part = SimpleNamespace(from_bytes=lambda data, mime_type: {"data": data, "mime_type": mime_type})
+
+    monkeypatch.setattr(app_module, "API_KEY", "fake-key")
+    monkeypatch.setattr(app_module, "vis_model", None)
+    monkeypatch.setattr(app_module, "gemini_client", fake_client)
+    monkeypatch.setattr(app_module, "genai_types", SimpleNamespace(Part=fake_part))
+    monkeypatch.setattr(app_module, "MODEL_NAME", "gemini-2.5-flash")
+    monkeypatch.setattr(app_module, "FALLBACK_MODEL", "gemini-2.5-pro")
+
+    image = Image.new("RGB", (8, 8), color="blue")
+
+    result = app_module.gen_image("describe this image", image)
+
+    assert result == "fallback response"
+    assert calls == ["gemini-2.5-flash", "gemini-2.5-pro"]
