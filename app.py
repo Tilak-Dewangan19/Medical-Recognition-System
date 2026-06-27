@@ -17,15 +17,35 @@ except Exception:
     pydicom = None
     dcmread = None
 
-# Load environment variables from .env
+# Load environment variables from .env for local development
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini").strip() or "openai/gpt-4o-mini"
+
+OPENROUTER_API_KEY = None
+OPENROUTER_MODEL = None
+
+
+def _get_openrouter_settings():
+    global OPENROUTER_API_KEY, OPENROUTER_MODEL
+
+    api_key = globals().get("OPENROUTER_API_KEY")
+    if api_key is None:
+        api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    else:
+        api_key = str(api_key).strip()
+
+    model = globals().get("OPENROUTER_MODEL")
+    if model is None:
+        model = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini").strip() or "openai/gpt-4o-mini"
+    else:
+        model = str(model).strip() or "openai/gpt-4o-mini"
+
+    return api_key, model
 
 
 def _has_openrouter_config():
-    cleaned = (OPENROUTER_API_KEY or "").strip()
+    api_key, _ = _get_openrouter_settings()
+    cleaned = (api_key or "").strip()
     if not cleaned:
         return False
     if cleaned in {"...", "your_openrouter_api_key", "your_key_here"}:
@@ -33,6 +53,8 @@ def _has_openrouter_config():
     if cleaned.startswith("sk-or") and len(cleaned) < 20:
         return False
     if "..." in cleaned:
+        return False
+    if cleaned.startswith("sk-or") and "v1-" in cleaned and len(cleaned) < 40:
         return False
     return True
 
@@ -56,6 +78,8 @@ def _call_openrouter(prompt, image):
     if not _has_openrouter_config():
         return None
 
+    api_key, model = _get_openrouter_settings()
+
     try:
         import requests
     except Exception:
@@ -65,7 +89,7 @@ def _call_openrouter(prompt, image):
     image_b64 = base64.b64encode(image_bytes).decode("ascii")
 
     payload = {
-        "model": OPENROUTER_MODEL,
+        "model": model,
         "messages": [
             {
                 "role": "system",
@@ -87,7 +111,7 @@ def _call_openrouter(prompt, image):
     }
 
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
 
