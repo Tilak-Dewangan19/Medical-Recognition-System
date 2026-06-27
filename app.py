@@ -139,10 +139,12 @@ def get_server_config():
 
 def get_analysis_prompt():
     return (
-        "You are analyzing an uploaded medical image. Provide a detailed, helpful medical-style description of the image contents. "
-        "Describe visible structures, patterns, textures, landmarks, or abnormalities in a clear and clinically relevant way. "
-        "If the image is an X-ray, ultrasound, MRI, wound, scan, or other medical image, mention the most relevant visible features. "
-        "Do not make a definitive diagnosis, but provide a clear description that a medical professional could use for interpretation."
+        "You are analyzing an uploaded medical image. Provide a detailed, structured medical-style description of what is visually present. "
+        "Describe the likely visible findings, possible medical relevance, and any notable patterns, textures, shapes, landmarks, or abnormalities. "
+        "If the image appears to show a wound, rash, lesion, scan, X-ray, ultrasound, MRI, or other clinical image, explain the visible features in a clear and clinically useful way. "
+        "Mention general possible causes or conditions only in a non-diagnostic, informational manner, and suggest that a qualified medical professional should review the image for confirmation. "
+        "Also include brief, practical guidance such as general precautions, monitoring suggestions, and when professional care should be sought. "
+        "If appropriate, mention general over-the-counter medication categories that may be considered only as non-prescriptive informational guidance, while clearly stating that a clinician should confirm any treatment."
     )
 
 
@@ -182,9 +184,10 @@ def index():
             response_text = gen_image(image_prompt, image)
         except Exception as exc:
             message = str(exc)
-            if "quota" in message.lower() or "429" in message:
-                return render_template('index.html', response_text="Gemini API quota exceeded. Please try again later or use a different API key.")
-            if "api key" in message.lower() or "permission" in message.lower() or "forbidden" in message.lower():
+            lowered = message.lower()
+            if "quota" in lowered or "429" in message or "rate limit" in lowered or "resource exhausted" in lowered or "exceeded" in lowered:
+                return render_template('index.html', response_text="Gemini API quota or rate-limit exceeded. This can happen when the deployed environment is using the same key too often or when the account has hit its usage limit. Please try again later or use a different key/account.")
+            if "api key" in lowered or "permission" in lowered or "forbidden" in lowered or "unauthorized" in lowered:
                 return render_template('index.html', response_text="Gemini API access failed. Please check your API key and permissions.")
             return render_template('index.html', response_text=f"The image could not be processed right now. Please try again. ({exc})", image_url=image_url)
 

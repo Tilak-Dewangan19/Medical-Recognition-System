@@ -143,6 +143,6 @@ def test_analysis_prompt_requests_general_visual_description():
     prompt = app_module.get_analysis_prompt()
 
     assert "medical-style description" in prompt.lower()
-    assert "visible structures" in prompt.lower()
-    assert "medical professional" in prompt.lower()
-    assert "definitive diagnosis" in prompt.lower()
+    assert "visible findings" in prompt.lower()
+    assert "precautions" in prompt.lower()
+    assert "professional care" in prompt.lower()
