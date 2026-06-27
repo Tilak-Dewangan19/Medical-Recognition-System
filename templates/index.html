@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Medical Image Recognition App</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header class="site-header">
+        <h1>Medical Image Recognition</h1>
+        <p class="tagline">AI-assisted image analysis — clear, readable, actionable.</p>
+    </header>
+
+    <main class="container">
+        <section class="upload-card">
+            <form method="post" enctype="multipart/form-data">
+                <label for="file">Choose a medical image</label>
+                <div class="file-row">
+                    <input type="file" name="file" accept=".jpg, .jpeg, .png, .bmp, .gif, .tif, .tiff, .webp, .dcm, .dicom, image/*" required>
+                    <input type="submit" value="Generate Description" class="generate-btn">
+                </div>
+            </form>
+        </section>
+
+        {% if response_text %}
+        <section class="result-card">
+            <div class="result-header">
+                <h2>Generated Medical Description</h2>
+                <div class="actions">
+                    {% if image_url %}
+                        <a href="{{ image_url }}" download class="btn small">Download Image</a>
+                    {% endif %}
+                    <button class="btn small" id="copyBtn">Copy</button>
+                    <button class="btn small" id="printBtn">Print</button>
+                    <button class="btn small primary" id="pdfBtn">Save PDF</button>
+                </div>
+            </div>
+
+            <div class="result-body">
+                {% if image_url %}
+                <aside class="image-panel">
+                    <img src="{{ image_url }}" alt="Uploaded image" class="uploaded-image">
+                </aside>
+                {% endif %}
+
+                <article class="text-panel">
+                    <div class="meta-line">Generated: <span class="muted">{{ ("now" ) }}</span></div>
+                    {% if response_html %}
+                        <div id="prescriptionText" class="prescription-html">{{ response_html|safe }}</div>
+                    {% else %}
+                        <div id="prescriptionText" class="prescription-html">{{ response_text }}</div>
+                    {% endif %}
+                </article>
+            </div>
+        </section>
+        {% endif %}
+    </main>
+
+    <script>
+    // Copy to clipboard
+    document.addEventListener('DOMContentLoaded', function(){
+        const copyBtn = document.getElementById('copyBtn');
+        const printBtn = document.getElementById('printBtn');
+        const pres = document.getElementById('prescriptionText');
+        if(copyBtn && pres){
+            copyBtn.addEventListener('click', function(){
+                navigator.clipboard.writeText(pres.innerText).then(()=>{
+                    copyBtn.innerText = 'Copied';
+                    setTimeout(()=> copyBtn.innerText = 'Copy', 1500);
+                }).catch(()=>{
+                    alert('Copy failed — please select and copy manually.');
+                });
+            });
+        }
+        if(printBtn && pres){
+            printBtn.addEventListener('click', function(){
+                const w = window.open('', '_blank');
+                const style = `
+                    <style>body{font-family:Arial,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;padding:20px;color:#0f1720} .pres{white-space:pre-wrap;line-height:1.5;font-size:15px}</style>`;
+                // Use innerHTML to preserve bold/line breaks
+                w.document.write('<html><head><title>Print</title>'+style+'</head><body><div class="pres">'+pres.innerHTML+'</div></body></html>');
+                w.document.close();
+                // Give the new window a moment to render
+                setTimeout(()=>{ w.print(); }, 250);
+            });
+        }
+
+        // PDF export using html2pdf (loaded via CDN if available)
+        const pdfBtn = document.getElementById('pdfBtn');
+        if(pdfBtn && pres){
+            pdfBtn.addEventListener('click', function(){
+                const element = document.createElement('div');
+                element.innerHTML = '<div style="padding:20px;font-family:Arial,Helvetica,sans-serif;color:#0f1720;">' + pres.innerHTML + '</div>';
+                // Prefer html2pdf if present
+                if(window.html2pdf){
+                    html2pdf().set({margin:10, filename:'prescription.pdf', html2canvas:{scale:1.25}}).from(element).save();
+                } else {
+                    // Fallback: open print dialog (user can Save as PDF)
+                    const w = window.open('', '_blank');
+                    w.document.write('<html><head><title>Save PDF</title></head><body>' + element.innerHTML + '</body></html>');
+                    w.document.close();
+                    setTimeout(()=> w.print(), 300);
+                }
+            });
+        }
+    });
+    </script>
+
+    <!-- Load html2pdf as optional enhancement for PDF export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js"></script>
+</body>
+</html>
