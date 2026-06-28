@@ -354,14 +354,15 @@ def log_startup_config():
 
 def get_analysis_prompt():
     return (
-        "You are analyzing an uploaded medical image. Provide a detailed, structured medical-style description of what is visually present. "
-        "Use a clean format with bold section headings and short paragraphs. "
-        "First describe the visible findings in a clear, organized way. Then add a short section on possible medical relevance, using cautious, non-diagnostic wording. "
-        "If the image appears to show a wound, rash, lesion, scan, X-ray, ultrasound, MRI, or other clinical image, explain the visible features in a clinically useful but non-definitive way. "
-        "Mention notable patterns, textures, shapes, landmarks, color changes, symmetry, borders, and any abnormalities. "
-        "Mention general possible causes or conditions only in a non-diagnostic, informational manner and recommend that a qualified medical professional review the image for confirmation. "
-        "Include practical guidance such as general precautions, monitoring suggestions, and when professional care should be sought. "
-        "If appropriate, mention general over-the-counter medication categories only as non-prescriptive informational guidance, clearly stating that a clinician should confirm any treatment."
+        "You are analyzing an uploaded medical image. Provide a detailed, structured, medically relevant description of what is visually present. "
+        "Use a polished format with bold section headings and short, readable paragraphs. "
+        "First give a clear description of the visible findings, including location, size, color, shape, borders, texture, symmetry, patterns, and any abnormalities. "
+        "Then provide a separate section on possible medical relevance, using cautious, non-diagnostic wording. "
+        "If the image appears to show a wound, rash, lesion, skin change, scan, X-ray, ultrasound, MRI, or other clinical image, explain the visible features in a clinically useful but non-definitive way. "
+        "Mention general possible causes or conditions only as informational possibilities, not as a diagnosis. "
+        "Add practical guidance with precautions, monitoring suggestions, and clear guidance on when professional medical care should be sought. "
+        "If relevant, mention general over-the-counter medication categories only as non-prescriptive informational guidance, clearly stating that a clinician should confirm any treatment. "
+        "Make the answer richer and more informative than a short summary. Include enough detail to be helpful, but keep it clinically cautious and easy to read."
     )
 
 
