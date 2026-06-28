@@ -1,6 +1,7 @@
 import io
 from pathlib import Path
 import sys
+import types
 from types import SimpleNamespace
 
 from PIL import Image
@@ -46,6 +47,37 @@ def test_upload_returns_generated_result_even_when_validation_says_no(monkeypatc
 
     assert response.status_code == 200
     assert "A medical description" in response.get_data(as_text=True)
+
+
+def test_call_gemini_retries_on_quota_error(monkeypatch):
+    calls = []
+
+    class FakeModels:
+        def generate_content(self, model, contents):
+            calls.append(model)
+            if len(calls) == 1:
+                raise RuntimeError("429 Resource exhausted: quota exceeded")
+            return SimpleNamespace(text="fallback description")
+
+    fake_client = SimpleNamespace(models=FakeModels())
+    fake_types_module = types.ModuleType("google.genai.types")
+    fake_types_module.Part = SimpleNamespace(
+        from_bytes=lambda data, mime_type: object(),
+        from_text=lambda text: object(),
+    )
+    fake_genai_module = types.ModuleType("google.genai")
+    fake_genai_module.types = fake_types_module
+    fake_genai_module.__path__ = []
+    monkeypatch.setitem(sys.modules, "google.genai", fake_genai_module)
+    monkeypatch.setitem(sys.modules, "google.genai.types", fake_types_module)
+    monkeypatch.setattr(app_module, "_get_gemini_client", lambda: fake_client)
+    monkeypatch.setattr(app_module, "GEMINI_MODEL", "gemini-2.5-flash")
+    monkeypatch.setattr(app_module, "GEMINI_FALLBACK_MODEL", "gemini-2.0-flash")
+
+    response = app_module._call_gemini("prompt", Image.new("RGB", (4, 4), color="blue"))
+
+    assert response == "fallback description"
+    assert calls == ["gemini-2.5-flash", "gemini-2.0-flash"]
 
 
 def test_upload_shows_configuration_message_when_api_key_is_missing(monkeypatch):

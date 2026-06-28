@@ -79,6 +79,28 @@ def _get_gemini_client():
         raise RuntimeError(f"Unable to initialize Gemini client: {exc}") from exc
 
 
+def _is_gemini_retryable_error(message):
+    lowered = (message or "").lower()
+    if not lowered:
+        return False
+
+    if "429" in lowered or "quota" in lowered or "rate limit" in lowered or "resource exhausted" in lowered:
+        return True
+    if "503" in lowered or "temporarily unavailable" in lowered or "high demand" in lowered or "overloaded" in lowered:
+        return True
+    if "model" in lowered and ("not found" in lowered or "unsupported" in lowered or "invalid" in lowered or "not available" in lowered or "not enabled" in lowered):
+        return True
+    return False
+
+
+def _get_gemini_fallback_response():
+    return (
+        "The image was uploaded successfully, but the Gemini API is currently rate-limited or temporarily unavailable. "
+        "A live AI description could not be retrieved right now. Please try again in a few minutes, or use a different API key or a higher-quota account. "
+        "If this is urgent, please consult a qualified healthcare professional for review."
+    )
+
+
 def _call_gemini(prompt, image):
     client = _get_gemini_client()
     image_bytes = io.BytesIO()
@@ -108,15 +130,10 @@ def _call_gemini(prompt, image):
             )
             return getattr(response, "text", None) or ""
         except Exception as exc:
-            message = str(exc).lower()
+            message = str(exc)
             last_error = exc
-            should_retry = False
-            if "model" in message and ("not found" in message or "unsupported" in message or "invalid" in message or "not available" in message or "not enabled" in message):
-                should_retry = True
-            if "503" in message or "unavailable" in message or "high demand" in message:
-                should_retry = True
-
-            if should_retry and len(models_to_try) > 1 and model_name != models_to_try[-1]:
+            if _is_gemini_retryable_error(message) and len(models_to_try) > 1 and model_name != models_to_try[-1]:
+                app.logger.warning("Gemini request failed for model %s; retrying with fallback model. Error: %s", model_name, message)
                 continue
             break
 
@@ -128,7 +145,14 @@ def gen_image(prompt, image):
     if not _has_gemini_config():
         return None
 
-    return _call_gemini(prompt, image)
+    try:
+        return _call_gemini(prompt, image)
+    except Exception as exc:
+        lowered = str(exc).lower()
+        if _is_gemini_retryable_error(lowered):
+            app.logger.warning("Gemini service unavailable, returning fallback description. Error: %s", exc)
+            return _get_gemini_fallback_response()
+        raise
 
 
 def load_image_from_upload(uploaded_file):
