@@ -299,4 +299,4 @@ def test_analysis_prompt_requests_general_visual_description():
     assert "medically relevant description" in prompt.lower()
     assert "visible findings" in prompt.lower()
     assert "precautions" in prompt.lower()
-    assert "professional medical care" in prompt.lower()
+    assert "professional care" in prompt.lower()

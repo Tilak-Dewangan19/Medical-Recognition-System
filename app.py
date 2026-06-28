@@ -356,13 +356,17 @@ def get_analysis_prompt():
     return (
         "You are analyzing an uploaded medical image. Provide a detailed, structured, medically relevant description of what is visually present. "
         "Use a polished format with bold section headings and short, readable paragraphs. "
-        "First give a clear description of the visible findings, including location, size, color, shape, borders, texture, symmetry, patterns, and any abnormalities. "
-        "Then provide a separate section on possible medical relevance, using cautious, non-diagnostic wording. "
+        "The response must follow this order exactly: "
+        "1. Medical Image Description: describe the visible findings clearly, including location, size, color, shape, borders, texture, symmetry, patterns, and any abnormalities. "
+        "2. Visual Findings: summarize the most important visual findings in a concise but informative way. "
+        "3. Possible Medical Relevance: explain what the findings might mean in a cautious, non-diagnostic way. "
+        "4. Practical Guidance: include general precautions, monitoring suggestions, and advice on what to watch for. "
+        "5. When Professional Care Should Be Sought: explain when a clinician or urgent medical attention should be considered. "
+        "6. OTC Information and Guidance: if relevant, mention general over-the-counter medication categories only as non-prescriptive informational guidance, clearly stating that a clinician should confirm any treatment. "
+        "7. Conclusion: end with a short summary that is clinically cautious and easy to understand. "
         "If the image appears to show a wound, rash, lesion, skin change, scan, X-ray, ultrasound, MRI, or other clinical image, explain the visible features in a clinically useful but non-definitive way. "
         "Mention general possible causes or conditions only as informational possibilities, not as a diagnosis. "
-        "Add practical guidance with precautions, monitoring suggestions, and clear guidance on when professional medical care should be sought. "
-        "If relevant, mention general over-the-counter medication categories only as non-prescriptive informational guidance, clearly stating that a clinician should confirm any treatment. "
-        "Make the answer richer and more informative than a short summary. Include enough detail to be helpful, but keep it clinically cautious and easy to read."
+        "Make the answer rich, detailed, structured, and helpful, with multiple headings and concise but informative sections."
     )
 
 
@@ -392,7 +396,10 @@ def _format_response_html(response_text):
         for line in lines:
             line = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", line)
             line = line.replace("- ", "• ")
-            formatted_lines.append(f"<p>{line}</p>")
+            if line.lower().startswith(("medical image description:", "visual findings:", "possible medical relevance:", "practical guidance:", "when professional care should be sought:", "otc information and guidance:", "conclusion:")):
+                html_parts.append(f"<h3>{line}</h3>")
+            else:
+                formatted_lines.append(f"<p>{line}</p>")
 
         html_parts.extend(formatted_lines)
 
