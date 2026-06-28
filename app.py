@@ -24,8 +24,16 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 
 
-def _has_gemini_config():
-    cleaned = (GOOGLE_API_KEY or "").strip()
+def _get_gemini_api_key():
+    for env_name in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_GENAI_API_KEY"):
+        value = os.getenv(env_name, "").strip()
+        if value:
+            return value
+    return (GOOGLE_API_KEY or "").strip()
+
+
+def _has_gemini_config(api_key=None):
+    cleaned = (api_key if api_key is not None else _get_gemini_api_key()).strip()
     if not cleaned:
         return False
     if cleaned in {"...", "your_google_api_key", "your_key_here", "GOOGLE_API_KEY"}:
@@ -43,16 +51,24 @@ BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / 'static' / 'uploads'
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-def _call_gemini(prompt, image):
-    if not _has_gemini_config():
-        return None
+def _get_gemini_client():
+    api_key = _get_gemini_api_key()
+    if not _has_gemini_config(api_key):
+        raise RuntimeError("Gemini API key is not configured. Set GOOGLE_API_KEY or GEMINI_API_KEY in the environment or .env file.")
 
     try:
         from google import genai
     except Exception as exc:
         raise RuntimeError("google-genai package is required for Gemini analysis") from exc
 
-    client = genai.Client(api_key=GOOGLE_API_KEY)
+    try:
+        return genai.Client(api_key=api_key)
+    except Exception as exc:
+        raise RuntimeError(f"Unable to initialize Gemini client: {exc}") from exc
+
+
+def _call_gemini(prompt, image):
+    client = _get_gemini_client()
     image_bytes = io.BytesIO()
     image.save(image_bytes, format=getattr(image, "format", None) or "PNG")
     image_bytes = image_bytes.getvalue()
@@ -69,7 +85,7 @@ def _call_gemini(prompt, image):
             },
         ],
     )
-    return response.text
+    return getattr(response, "text", None) or ""
 
 
 # Function to generate content
