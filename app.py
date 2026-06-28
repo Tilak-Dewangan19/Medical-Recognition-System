@@ -10,7 +10,6 @@ from markupsafe import escape as markupsafe_escape
 from dotenv import load_dotenv
 from flask import Flask, request, render_template, url_for
 from werkzeug.utils import secure_filename
-import requests
 
 try:
     import pydicom
@@ -23,10 +22,9 @@ except Exception:
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini").strip() or "openai/gpt-4o-mini"
-OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip().rstrip("/") or "https://openrouter.ai/api/v1"
-OPENROUTER_HTTP_REFERER = os.getenv("OPENROUTER_HTTP_REFERER", "https://openrouter.ai").strip() or "https://openrouter.ai"
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK", "gemini-2.5-pro").strip() or "gemini-2.5-pro"
 
 
 def _get_runtime_setting(name, default=""):
@@ -36,20 +34,27 @@ def _get_runtime_setting(name, default=""):
     return default
 
 
-def _get_openrouter_api_key():
-    module_key = (OPENROUTER_API_KEY or "").strip()
-    if module_key and module_key not in {"...", "your_openrouter_key", "your_key_here", "OPENROUTER_API_KEY"} and "..." not in module_key:
-        return module_key
+def _get_gemini_api_key():
+    module_key = (GOOGLE_API_KEY or "").strip()
+    if module_key:
+        if module_key not in {"...", "your_google_api_key", "your_key_here", "GOOGLE_API_KEY"}:
+            return module_key
+        return ""
 
-    runtime_key = _get_runtime_setting("OPENROUTER_API_KEY", "").strip()
-    if runtime_key and runtime_key not in {"...", "your_openrouter_key", "your_key_here", "OPENROUTER_API_KEY"} and "..." not in runtime_key:
-        return runtime_key
+    for env_name in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_GENAI_API_KEY"):
+        value = os.getenv(env_name, "").strip()
+        if value and value not in {"...", "your_google_api_key", "your_key_here", "GOOGLE_API_KEY"}:
+            return value
     return ""
 
 
-def _has_openrouter_config():
-    api_key = _get_openrouter_api_key()
-    if not api_key:
+def _has_gemini_config(api_key=None):
+    cleaned = (api_key if api_key is not None else _get_gemini_api_key()).strip()
+    if not cleaned:
+        return False
+    if cleaned in {"...", "your_google_api_key", "your_key_here", "GOOGLE_API_KEY"}:
+        return False
+    if "..." in cleaned:
         return False
     return True
 
@@ -69,85 +74,95 @@ BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / 'static' / 'uploads'
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-def _call_openrouter(prompt, image):
-    if not _has_openrouter_config():
-        raise RuntimeError("OpenRouter API key is not configured. Set OPENROUTER_API_KEY in the environment or .env file.")
+def _get_gemini_client():
+    api_key = _get_gemini_api_key()
+    if not _has_gemini_config(api_key):
+        raise RuntimeError("Gemini API key is not configured. Set GOOGLE_API_KEY or GEMINI_API_KEY in the environment or .env file.")
 
-    api_key = _get_openrouter_api_key()
-    model_name = (OPENROUTER_MODEL or "").strip() or _get_runtime_setting("OPENROUTER_MODEL", "openai/gpt-4o-mini")
-    base_url = (OPENROUTER_BASE_URL or "").strip() or _get_runtime_setting("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-    http_referer = (OPENROUTER_HTTP_REFERER or "").strip() or _get_runtime_setting("OPENROUTER_HTTP_REFERER", "https://openrouter.ai")
+    try:
+        from google import genai
+    except Exception as exc:
+        raise RuntimeError("google-genai package is required for Gemini analysis") from exc
 
-    image_bytes = io.BytesIO()
-    image.save(image_bytes, format=getattr(image, "format", None) or "PNG")
-    encoded_image = base64.b64encode(image_bytes.getvalue()).decode("ascii")
-    mime_type = "image/png"
-    if getattr(image, "format", None):
-        mime_type = f"image/{str(image.format).lower()}"
+    try:
+        return genai.Client(api_key=api_key)
+    except Exception as exc:
+        raise RuntimeError(f"Unable to initialize Gemini client: {exc}") from exc
 
-    payload = {
-        "model": model_name,
-        "messages": [
-            {
-                "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "You are an image analysis assistant. Describe the visible features in a concise, medically useful way and mention that a clinician should confirm any interpretation."
-                    }
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{mime_type};base64,{encoded_image}"
-                        },
-                    },
-                ],
-            },
-        ],
-        "temperature": 0.2,
-    }
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": http_referer,
-        "X-Title": os.getenv("OPENROUTER_TITLE", "Medicine Recognition System"),
-    }
+def _is_gemini_retryable_error(message):
+    lowered = (message or "").lower()
+    if not lowered:
+        return False
 
-    response = requests.post(
-        f"{base_url}/chat/completions",
-        headers=headers,
-        json=payload,
-        timeout=120,
+    if "429" in lowered or "quota" in lowered or "rate limit" in lowered or "resource exhausted" in lowered:
+        return True
+    if "503" in lowered or "temporarily unavailable" in lowered or "high demand" in lowered or "overloaded" in lowered:
+        return True
+    if "model" in lowered and ("not found" in lowered or "unsupported" in lowered or "invalid" in lowered or "not available" in lowered or "not enabled" in lowered):
+        return True
+    return False
+
+
+def _get_gemini_fallback_response():
+    return (
+        "The image was uploaded successfully, but the Gemini API is currently rate-limited or temporarily unavailable. "
+        "A live AI description could not be retrieved right now. Please try again in a few minutes, or use a different API key or a higher-quota account. "
+        "If this is urgent, please consult a qualified healthcare professional for review."
     )
 
-    if hasattr(response, "raise_for_status"):
-        response.raise_for_status()
-    elif getattr(response, "status_code", 200) >= 400:
-        raise RuntimeError(f"OpenRouter request failed with status {getattr(response, 'status_code', 'unknown')}")
 
-    data = response.json() if hasattr(response, "json") else {}
-    return data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+def _call_gemini(prompt, image):
+    client = _get_gemini_client()
+    image_bytes = io.BytesIO()
+    image.save(image_bytes, format=getattr(image, "format", None) or "PNG")
+    image_bytes = image_bytes.getvalue()
+
+    try:
+        from google.genai import types
+    except Exception as exc:
+        raise RuntimeError("google-genai SDK does not expose the required types module") from exc
+
+    image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/png")
+    prompt_part = types.Part.from_text(text=prompt)
+
+    models_to_try = []
+    if GEMINI_MODEL:
+        models_to_try.append(GEMINI_MODEL)
+    if GEMINI_FALLBACK_MODEL and GEMINI_FALLBACK_MODEL != GEMINI_MODEL:
+        models_to_try.append(GEMINI_FALLBACK_MODEL)
+
+    last_error = None
+    for model_name in models_to_try:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=[prompt_part, image_part],
+            )
+            return getattr(response, "text", None) or ""
+        except Exception as exc:
+            message = str(exc)
+            last_error = exc
+            if _is_gemini_retryable_error(message) and len(models_to_try) > 1 and model_name != models_to_try[-1]:
+                app.logger.warning("Gemini request failed for model %s; retrying with fallback model. Error: %s", model_name, message)
+                continue
+            break
+
+    raise RuntimeError(f"Gemini request failed: {last_error}") from last_error
 
 
 # Function to generate content
 def gen_image(prompt, image):
-    if not _has_openrouter_config():
-        app.logger.warning("OpenRouter is required for image analysis.")
-        raise RuntimeError("OpenRouter API key is not configured. Set OPENROUTER_API_KEY in the environment or .env file.")
+    if not _has_gemini_config():
+        app.logger.warning("Gemini API key is not configured; returning a fallback message.")
+        return _get_gemini_fallback_response()
 
-    app.logger.info("Using OpenRouter exclusively for image analysis.")
+    app.logger.info("Using Gemini for image analysis.")
     try:
-        return _call_openrouter(prompt, image)
+        return _call_gemini(prompt, image)
     except Exception as exc:
-        app.logger.exception("OpenRouter request failed")
-        raise RuntimeError(f"OpenRouter request failed: {exc}") from exc
+        app.logger.exception("Gemini request failed")
+        return _get_gemini_fallback_response()
 
 
 def load_image_from_upload(uploaded_file):
@@ -214,7 +229,21 @@ def log_startup_config():
     app.logger.info("="*60)
     app.logger.info("STARTUP CONFIGURATION DIAGNOSTICS")
     app.logger.info("="*60)
-
+    
+    # Check API Key
+    api_key = _get_gemini_api_key()
+    if api_key and _has_gemini_config(api_key):
+        app.logger.info(f"✓ Google API Key is configured (length: {len(api_key)})")
+    else:
+        app.logger.error("✗ Google API Key is NOT configured properly!")
+        app.logger.error("   - Check that GOOGLE_API_KEY environment variable is set")
+        app.logger.error("   - In local dev: add to .env file")
+        app.logger.error("   - In production: set via platform config (Heroku, Railway, etc)")
+    
+    # Check models
+    app.logger.info(f"✓ Primary model: {GEMINI_MODEL}")
+    app.logger.info(f"✓ Fallback model: {GEMINI_FALLBACK_MODEL}")
+    
     # Check upload directory
     try:
         UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -224,14 +253,14 @@ def log_startup_config():
             app.logger.warning(f"✗ Upload directory not writable: {UPLOAD_DIR}")
     except Exception as e:
         app.logger.error(f"✗ Failed to verify upload directory: {e}")
-
-    # Check OpenRouter configuration
-    if _has_openrouter_config():
-        app.logger.info("✓ OpenRouter API key is configured")
-        app.logger.info(f"✓ OpenRouter model: {OPENROUTER_MODEL}")
-    else:
-        app.logger.warning("⚠ OpenRouter is not configured. Set OPENROUTER_API_KEY to enable image analysis.")
-
+    
+    # Check dependencies
+    try:
+        from google import genai
+        app.logger.info("✓ google-genai package is available")
+    except ImportError:
+        app.logger.error("✗ google-genai package NOT available - install with: pip install google-genai")
+    
     app.logger.info("="*60)
 
 
@@ -319,21 +348,23 @@ def index():
         except Exception:
             return render_template('index.html', response_text="The uploaded file is not a valid image. Please try another file or convert a DICOM/X-ray scan to JPG or PNG.")
 
-        if not _has_openrouter_config():
-            return render_template('index.html', response_text="OpenRouter API is not configured. Please set OPENROUTER_API_KEY in the environment or .env file.", image_url=image_url)
+        if not _has_gemini_config():
+            return render_template('index.html', response_text="Gemini API is not configured or the key is invalid. Please set GOOGLE_API_KEY to a real Gemini key in the environment or .env file.", image_url=image_url)
 
         try:
             response_text = gen_image(image_prompt, image)
         except Exception as exc:
-            app.logger.exception("OpenRouter request failed")
+            app.logger.exception("Gemini request failed")
             message = str(exc)
             lowered = message.lower()
-            if "api key" in lowered or "permission" in lowered or "forbidden" in lowered or "unauthorized" in lowered:
-                return render_template('index.html', response_text="OpenRouter API access failed. Please check your API key and permissions.")
-            if "429" in message or "quota" in lowered or "rate limit" in lowered or "resource exhausted" in lowered:
-                return render_template('index.html', response_text="OpenRouter is currently rate-limited. Please try again in a few minutes.")
+            if "quota" in lowered or "429" in message or "rate limit" in lowered or "resource exhausted" in lowered or "exceeded" in lowered:
+                return render_template('index.html', response_text="Gemini API quota or rate-limit exceeded. Your deployment may be hitting the account limit. Please wait a while, reduce upload frequency, or use a higher-quota key.")
             if "503" in lowered or "unavailable" in lowered or "high demand" in lowered:
-                return render_template('index.html', response_text="OpenRouter is temporarily unavailable. Please try again later.")
+                return render_template('index.html', response_text="The Gemini model is temporarily unavailable due to high demand. Please try again later or use a different key or model.")
+            if "api key" in lowered or "permission" in lowered or "forbidden" in lowered or "unauthorized" in lowered:
+                return render_template('index.html', response_text="Gemini API access failed. Please check your API key and permissions.")
+            if "model" in lowered and "not found" in lowered:
+                return render_template('index.html', response_text="The configured Gemini model is unavailable in your account. Please update GEMINI_MODEL to a supported model.")
             return render_template('index.html', response_text=f"The image could not be processed right now. Please try again. ({exc})", image_url=image_url)
 
         if response_text:
