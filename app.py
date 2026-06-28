@@ -1,4 +1,5 @@
 import io
+import logging
 import os
 from pathlib import Path
 from PIL import Image
@@ -48,6 +49,8 @@ def _has_gemini_config(api_key=None):
     return True
 
 app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
+app.logger.setLevel(logging.INFO)
 
 ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tif', '.tiff', '.webp', '.dcm', '.dicom'}
 
@@ -221,6 +224,7 @@ def index():
         try:
             response_text = gen_image(image_prompt, image)
         except Exception as exc:
+            app.logger.exception("Gemini request failed")
             message = str(exc)
             lowered = message.lower()
             if "quota" in lowered or "429" in message or "rate limit" in lowered or "resource exhausted" in lowered or "exceeded" in lowered:
@@ -250,3 +254,12 @@ def index():
 
 if __name__ == '__main__':
     app.run(**get_server_config())
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(error):
+    app.logger.exception("Unhandled exception")
+    message = "An unexpected error occurred while processing your request."
+    if app.debug:
+        message = f"Internal server error: {error}"
+    return render_template('index.html', response_text=message), 500
