@@ -80,9 +80,28 @@ def test_call_gemini_retries_on_quota_error(monkeypatch):
     assert calls == ["gemini-2.5-flash", "gemini-2.0-flash"]
 
 
+def test_call_openrouter_returns_text(monkeypatch):
+    def fake_post(url, headers=None, json=None, timeout=60):
+        assert url.endswith("/chat/completions")
+        assert headers["Authorization"].startswith("Bearer ")
+        return SimpleNamespace(json=lambda: {"choices": [{"message": {"content": "openrouter description"}}]})
+
+    monkeypatch.setattr(app_module.requests, "post", fake_post)
+    monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "fake-openrouter-key")
+    monkeypatch.setattr(app_module, "OPENROUTER_MODEL", "openai/gpt-4o-mini")
+
+    response = app_module._call_openrouter("prompt", Image.new("RGB", (4, 4), color="blue"))
+
+    assert response == "openrouter description"
+
+
 def test_upload_shows_configuration_message_when_api_key_is_missing(monkeypatch):
     client = app_module.app.test_client()
     monkeypatch.setattr(app_module, "GOOGLE_API_KEY", "")
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_API_KEY", raising=False)
+    monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "")
 
     img_bytes = io.BytesIO()
     Image.new("RGB", (32, 32), color="blue").save(img_bytes, format="PNG")

@@ -1,3 +1,4 @@
+import base64
 import io
 import logging
 import os
@@ -9,6 +10,7 @@ from markupsafe import escape as markupsafe_escape
 from dotenv import load_dotenv
 from flask import Flask, request, render_template, url_for
 from werkzeug.utils import secure_filename
+import requests
 
 try:
     import pydicom
@@ -24,12 +26,17 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK", "gemini-2.5-pro").strip() or "gemini-2.5-pro"
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini").strip() or "openai/gpt-4o-mini"
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip().rstrip("/") or "https://openrouter.ai/api/v1"
 
 
 def _get_gemini_api_key():
     module_key = (GOOGLE_API_KEY or "").strip()
-    if module_key and module_key not in {"...", "your_google_api_key", "your_key_here", "GOOGLE_API_KEY"}:
-        return module_key
+    if module_key:
+        if module_key not in {"...", "your_google_api_key", "your_key_here", "GOOGLE_API_KEY"}:
+            return module_key
+        return ""
 
     for env_name in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_GENAI_API_KEY"):
         value = os.getenv(env_name, "").strip()
@@ -47,6 +54,18 @@ def _has_gemini_config(api_key=None):
     if "..." in cleaned:
         return False
     return True
+
+
+def _has_openrouter_config():
+    api_key = (OPENROUTER_API_KEY or "").strip()
+    if not api_key:
+        return False
+    if api_key in {"...", "your_openrouter_key", "your_key_here", "OPENROUTER_API_KEY"}:
+        return False
+    if "..." in api_key:
+        return False
+    return True
+
 
 app = Flask(__name__)
 logging.basicConfig(
@@ -101,6 +120,68 @@ def _get_gemini_fallback_response():
     )
 
 
+def _call_openrouter(prompt, image):
+    if not _has_openrouter_config():
+        raise RuntimeError("OpenRouter API key is not configured. Set OPENROUTER_API_KEY in the environment or .env file.")
+
+    image_bytes = io.BytesIO()
+    image.save(image_bytes, format=getattr(image, "format", None) or "PNG")
+    encoded_image = base64.b64encode(image_bytes.getvalue()).decode("ascii")
+    mime_type = "image/png"
+    if getattr(image, "format", None):
+        mime_type = f"image/{str(image.format).lower()}"
+
+    payload = {
+        "model": OPENROUTER_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are an image analysis assistant. Describe the visible features in a concise, medically useful way and mention that a clinician should confirm any interpretation."
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{mime_type};base64,{encoded_image}"
+                        },
+                    },
+                ],
+            },
+        ],
+        "temperature": 0.2,
+    }
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": os.getenv("OPENROUTER_HTTP_REFERER", "https://example.com"),
+        "X-Title": os.getenv("OPENROUTER_TITLE", "Medicine Recognition System"),
+    }
+
+    response = requests.post(
+        f"{OPENROUTER_BASE_URL}/chat/completions",
+        headers=headers,
+        json=payload,
+        timeout=120,
+    )
+
+    if hasattr(response, "raise_for_status"):
+        response.raise_for_status()
+    elif getattr(response, "status_code", 200) >= 400:
+        raise RuntimeError(f"OpenRouter request failed with status {getattr(response, 'status_code', 'unknown')}")
+
+    data = response.json() if hasattr(response, "json") else {}
+    return data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+
+
 def _call_gemini(prompt, image):
     client = _get_gemini_client()
     image_bytes = io.BytesIO()
@@ -142,13 +223,27 @@ def _call_gemini(prompt, image):
 
 # Function to generate content
 def gen_image(prompt, image):
-    if not _has_gemini_config():
+    if not _has_gemini_config() and not _has_openrouter_config():
         return None
 
     try:
         return _call_gemini(prompt, image)
     except Exception as exc:
         lowered = str(exc).lower()
+        should_try_openrouter = _has_openrouter_config() and (
+            _is_gemini_retryable_error(lowered)
+            or "api key is not configured" in lowered
+            or "unable to initialize" in lowered
+            or "required types module" in lowered
+        )
+        if should_try_openrouter:
+            app.logger.warning("Gemini service unavailable, trying OpenRouter fallback. Error: %s", exc)
+            try:
+                return _call_openrouter(prompt, image)
+            except Exception as openrouter_exc:
+                app.logger.exception("OpenRouter fallback failed")
+                return _get_gemini_fallback_response()
+
         if _is_gemini_retryable_error(lowered):
             app.logger.warning("Gemini service unavailable, returning fallback description. Error: %s", exc)
             return _get_gemini_fallback_response()
@@ -239,6 +334,13 @@ def log_startup_config():
     except Exception as e:
         app.logger.error(f"✗ Failed to verify upload directory: {e}")
     
+    # Check OpenRouter configuration
+    if _has_openrouter_config():
+        app.logger.info("✓ OpenRouter API key is configured")
+        app.logger.info(f"✓ OpenRouter model: {OPENROUTER_MODEL}")
+    else:
+        app.logger.warning("⚠ OpenRouter is not configured. Set OPENROUTER_API_KEY to enable fallback routing.")
+
     # Check dependencies
     try:
         from google import genai
