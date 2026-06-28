@@ -119,6 +119,27 @@ def test_gemini_errors_surface_clear_message(monkeypatch):
     assert "quota exceeded" in body.lower() or "quota" in body.lower()
 
 
+def test_gemini_high_demand_is_reported_clearly(monkeypatch):
+    client = app_module.app.test_client()
+    monkeypatch.setattr(app_module, "GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(app_module, "gen_image", lambda prompt, image: (_ for _ in ()).throw(RuntimeError("503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand.'}}")))
+
+    img_bytes = io.BytesIO()
+    Image.new("RGB", (32, 32), color="yellow").save(img_bytes, format="PNG")
+    img_bytes.seek(0)
+
+    response = client.post(
+        "/",
+        data={"file": (img_bytes, "test.png")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "temporarily unavailable" in body.lower()
+    assert "high demand" in body.lower() or "try again later" in body.lower()
+
+
 def test_call_gemini_falls_back_to_other_models(monkeypatch):
     class FakeModels:
         def __init__(self):

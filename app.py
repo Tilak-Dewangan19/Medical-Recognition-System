@@ -106,7 +106,13 @@ def _call_gemini(prompt, image):
         except Exception as exc:
             message = str(exc).lower()
             last_error = exc
+            should_retry = False
             if "model" in message and ("not found" in message or "unsupported" in message or "invalid" in message or "not available" in message or "not enabled" in message):
+                should_retry = True
+            if "503" in message or "unavailable" in message or "high demand" in message:
+                should_retry = True
+
+            if should_retry and len(models_to_try) > 1 and model_name != models_to_try[-1]:
                 continue
             break
 
@@ -118,10 +124,7 @@ def gen_image(prompt, image):
     if not _has_gemini_config():
         return None
 
-    try:
-        return _call_gemini(prompt, image)
-    except Exception as exc:
-        raise RuntimeError(f"Gemini request failed: {exc}") from exc
+    return _call_gemini(prompt, image)
 
 
 def load_image_from_upload(uploaded_file):
@@ -229,6 +232,8 @@ def index():
             lowered = message.lower()
             if "quota" in lowered or "429" in message or "rate limit" in lowered or "resource exhausted" in lowered or "exceeded" in lowered:
                 return render_template('index.html', response_text="Gemini API quota or rate-limit exceeded. Your deployment may be hitting the account limit. Please wait a while, reduce upload frequency, or use a higher-quota key.")
+            if "503" in lowered or "unavailable" in lowered or "high demand" in lowered:
+                return render_template('index.html', response_text="The Gemini model is temporarily unavailable due to high demand. Please try again later or use a different key or model.")
             if "api key" in lowered or "permission" in lowered or "forbidden" in lowered or "unauthorized" in lowered:
                 return render_template('index.html', response_text="Gemini API access failed. Please check your API key and permissions.")
             if "model" in lowered and "not found" in lowered:
