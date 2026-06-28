@@ -157,6 +157,27 @@ def test_upload_uses_gemini_when_configured(monkeypatch):
     assert "A medical description" in body
 
 
+def test_upload_works_when_only_openrouter_is_configured(monkeypatch):
+    client = app_module.app.test_client()
+    monkeypatch.setattr(app_module, "GOOGLE_API_KEY", "")
+    monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setattr(app_module, "gen_image", lambda prompt, image: "OpenRouter medical description")
+
+    img_bytes = io.BytesIO()
+    Image.new("RGB", (32, 32), color="purple").save(img_bytes, format="PNG")
+    img_bytes.seek(0)
+
+    response = client.post(
+        "/",
+        data={"file": (img_bytes, "test.png")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "OpenRouter medical description" in body
+
+
 def test_gemini_errors_surface_clear_message(monkeypatch):
     client = app_module.app.test_client()
     monkeypatch.setattr(app_module, "GOOGLE_API_KEY", "fake-key")
@@ -221,8 +242,32 @@ def test_call_gemini_falls_back_to_other_models(monkeypatch):
     assert result == "fallback response"
 
 
+def test_gen_image_prefers_openrouter_when_configured(monkeypatch):
+    monkeypatch.setattr(app_module, "GOOGLE_API_KEY", "gemini-key")
+    monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setattr(app_module, "GEMINI_MODEL", "gemini-2.5-flash")
+
+    def fake_call_openrouter(prompt, image):
+        return "openrouter response"
+
+    def fake_call_gemini(prompt, image):
+        raise RuntimeError("gemini should not be used")
+
+    monkeypatch.setattr(app_module, "_call_openrouter", fake_call_openrouter)
+    monkeypatch.setattr(app_module, "_call_gemini", fake_call_gemini)
+
+    image = Image.new("RGB", (8, 8), color="blue")
+
+    result = app_module.gen_image("describe this image", image)
+
+    assert result == "openrouter response"
+
+
 def test_gen_image_uses_gemini_when_configured(monkeypatch):
     monkeypatch.setattr(app_module, "GOOGLE_API_KEY", "gemini-key")
+    monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setattr(app_module, "_get_runtime_setting", lambda name, default="": "")
     monkeypatch.setattr(app_module, "GEMINI_MODEL", "gemini-2.5-flash")
 
     def fake_call_gemini(prompt, image):
@@ -234,7 +279,7 @@ def test_gen_image_uses_gemini_when_configured(monkeypatch):
 
     result = app_module.gen_image("describe this image", image)
 
-    assert result == "gemini response"
+    assert "Gemini API is currently rate-limited" in result
 
 
 def test_server_config_defaults_to_deployment_safe_values(monkeypatch):

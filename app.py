@@ -238,31 +238,16 @@ def _call_gemini(prompt, image):
 
 # Function to generate content
 def gen_image(prompt, image):
-    if not _has_gemini_config() and not _has_openrouter_config():
-        return None
+    if not _has_openrouter_config():
+        app.logger.warning("OpenRouter is required for image analysis; Gemini is temporarily disabled for this session.")
+        return _get_gemini_fallback_response()
 
+    app.logger.info("Using OpenRouter exclusively for image analysis.")
     try:
-        return _call_gemini(prompt, image)
+        return _call_openrouter(prompt, image)
     except Exception as exc:
-        lowered = str(exc).lower()
-        should_try_openrouter = _has_openrouter_config() and (
-            _is_gemini_retryable_error(lowered)
-            or "api key is not configured" in lowered
-            or "unable to initialize" in lowered
-            or "required types module" in lowered
-        )
-        if should_try_openrouter:
-            app.logger.warning("Gemini service unavailable, trying OpenRouter fallback. Error: %s", exc)
-            try:
-                return _call_openrouter(prompt, image)
-            except Exception as openrouter_exc:
-                app.logger.exception("OpenRouter fallback failed")
-                return _get_gemini_fallback_response()
-
-        if _is_gemini_retryable_error(lowered):
-            app.logger.warning("Gemini service unavailable, returning fallback description. Error: %s", exc)
-            return _get_gemini_fallback_response()
-        raise
+        app.logger.exception("OpenRouter request failed")
+        return _get_gemini_fallback_response()
 
 
 def load_image_from_upload(uploaded_file):
@@ -370,6 +355,7 @@ def log_startup_config():
 def get_analysis_prompt():
     return (
         "You are analyzing an uploaded medical image. Provide a detailed, structured medical-style description of what is visually present. "
+        "Use a clean format with bold section headings and short paragraphs. "
         "First describe the visible findings in a clear, organized way. Then add a short section on possible medical relevance, using cautious, non-diagnostic wording. "
         "If the image appears to show a wound, rash, lesion, scan, X-ray, ultrasound, MRI, or other clinical image, explain the visible features in a clinically useful but non-definitive way. "
         "Mention notable patterns, textures, shapes, landmarks, color changes, symmetry, borders, and any abnormalities. "
@@ -377,6 +363,39 @@ def get_analysis_prompt():
         "Include practical guidance such as general precautions, monitoring suggestions, and when professional care should be sought. "
         "If appropriate, mention general over-the-counter medication categories only as non-prescriptive informational guidance, clearly stating that a clinician should confirm any treatment."
     )
+
+
+def _format_response_html(response_text):
+    escaped = markupsafe_escape(response_text)
+    escaped = escaped.replace("\r\n", "\n").replace("\r", "\n")
+
+    paragraphs = [p.strip() for p in escaped.split("\n\n") if p.strip()]
+    html_parts = []
+
+    for paragraph in paragraphs:
+        if paragraph.startswith("### "):
+            heading = paragraph[4:].strip()
+            html_parts.append(f"<h3>{heading}</h3>")
+            continue
+
+        lines = [line.strip() for line in paragraph.split("\n") if line.strip()]
+        if not lines:
+            continue
+
+        if len(lines) == 1 and lines[0].startswith("- "):
+            items = "".join(f"<li>{item[2:]}</li>" for item in lines)
+            html_parts.append(f"<ul>{items}</ul>")
+            continue
+
+        formatted_lines = []
+        for line in lines:
+            line = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", line)
+            line = line.replace("- ", "• ")
+            formatted_lines.append(f"<p>{line}</p>")
+
+        html_parts.extend(formatted_lines)
+
+    return "".join(html_parts)
 
 
 @app.route('/', methods=['GET', 'POST'])
@@ -428,13 +447,8 @@ def index():
             return render_template('index.html', response_text=f"The image could not be processed right now. Please try again. ({exc})", image_url=image_url)
 
         if response_text:
-            # Convert simple markdown-like bold (**text**) into safe HTML <strong> for readability
             try:
-                escaped = markupsafe_escape(response_text)
-                html_with_bold = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
-                html_with_bold = html_with_bold.replace("### ", "<h3>").replace("\n", "<br/>")
-                html_with_bold = html_with_bold.replace("<h3>", "<h3>", 1)
-                response_html = html_with_bold.replace('\n', '<br/>')
+                response_html = _format_response_html(response_text)
             except Exception:
                 response_html = markupsafe_escape(response_text).replace('\n', '<br/>')
 
