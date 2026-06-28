@@ -297,9 +297,14 @@ def validate(prompt):
 
 
 def get_server_config():
+    port_value = os.getenv("PORT", "5000").strip()
+    try:
+        port = int(port_value)
+    except ValueError:
+        port = 5000
     return {
         "host": os.getenv("HOST", "0.0.0.0"),
-        "port": int(os.getenv("PORT", "5000")),
+        "port": port,
         "debug": False,
     }
 
@@ -472,7 +477,11 @@ log_startup_config()
 
 
 if __name__ == '__main__':
-    app.run(**get_server_config())
+    try:
+        app.run(**get_server_config())
+    except Exception as exc:
+        app.logger.exception("Failed to start Flask app: %s", exc)
+        raise
 
 
 @app.errorhandler(500)
