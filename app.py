@@ -29,6 +29,7 @@ GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK", "gemini-2.5-pro").strip() o
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini").strip() or "openai/gpt-4o-mini"
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip().rstrip("/") or "https://openrouter.ai/api/v1"
+OPENROUTER_HTTP_REFERER = os.getenv("OPENROUTER_HTTP_REFERER", "https://openrouter.ai").strip() or "https://openrouter.ai"
 
 
 def _get_gemini_api_key():
@@ -162,7 +163,7 @@ def _call_openrouter(prompt, image):
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
-        "HTTP-Referer": os.getenv("OPENROUTER_HTTP_REFERER", "https://example.com"),
+        "HTTP-Referer": OPENROUTER_HTTP_REFERER,
         "X-Title": os.getenv("OPENROUTER_TITLE", "Medicine Recognition System"),
     }
 
@@ -355,11 +356,12 @@ def log_startup_config():
 def get_analysis_prompt():
     return (
         "You are analyzing an uploaded medical image. Provide a detailed, structured medical-style description of what is visually present. "
-        "Describe the likely visible findings, possible medical relevance, and any notable patterns, textures, shapes, landmarks, or abnormalities. "
-        "If the image appears to show a wound, rash, lesion, scan, X-ray, ultrasound, MRI, or other clinical image, explain the visible features in a clear and clinically useful way. "
-        "Mention general possible causes or conditions only in a non-diagnostic, informational manner, and suggest that a qualified medical professional should review the image for confirmation. "
-        "Also include brief, practical guidance such as general precautions, monitoring suggestions, and when professional care should be sought. "
-        "If appropriate, mention general over-the-counter medication categories that may be considered only as non-prescriptive informational guidance, while clearly stating that a clinician should confirm any treatment."
+        "First describe the visible findings in a clear, organized way. Then add a short section on possible medical relevance, using cautious, non-diagnostic wording. "
+        "If the image appears to show a wound, rash, lesion, scan, X-ray, ultrasound, MRI, or other clinical image, explain the visible features in a clinically useful but non-definitive way. "
+        "Mention notable patterns, textures, shapes, landmarks, color changes, symmetry, borders, and any abnormalities. "
+        "Mention general possible causes or conditions only in a non-diagnostic, informational manner and recommend that a qualified medical professional review the image for confirmation. "
+        "Include practical guidance such as general precautions, monitoring suggestions, and when professional care should be sought. "
+        "If appropriate, mention general over-the-counter medication categories only as non-prescriptive informational guidance, clearly stating that a clinician should confirm any treatment."
     )
 
 
@@ -415,9 +417,9 @@ def index():
             # Convert simple markdown-like bold (**text**) into safe HTML <strong> for readability
             try:
                 escaped = markupsafe_escape(response_text)
-                # Replace **bold** with <strong>bold</strong>
                 html_with_bold = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
-                # Preserve line breaks
+                html_with_bold = html_with_bold.replace("### ", "<h3>").replace("\n", "<br/>")
+                html_with_bold = html_with_bold.replace("<h3>", "<h3>", 1)
                 response_html = html_with_bold.replace('\n', '<br/>')
             except Exception:
                 response_html = markupsafe_escape(response_text).replace('\n', '<br/>')
