@@ -22,14 +22,19 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK", "gemini-2.5-pro").strip() or "gemini-2.5-pro"
 
 
 def _get_gemini_api_key():
+    module_key = (GOOGLE_API_KEY or "").strip()
+    if module_key and module_key not in {"...", "your_google_api_key", "your_key_here", "GOOGLE_API_KEY"}:
+        return module_key
+
     for env_name in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_GENAI_API_KEY"):
         value = os.getenv(env_name, "").strip()
-        if value:
+        if value and value not in {"...", "your_google_api_key", "your_key_here", "GOOGLE_API_KEY"}:
             return value
-    return (GOOGLE_API_KEY or "").strip()
+    return ""
 
 
 def _has_gemini_config(api_key=None):
@@ -73,19 +78,36 @@ def _call_gemini(prompt, image):
     image.save(image_bytes, format=getattr(image, "format", None) or "PNG")
     image_bytes = image_bytes.getvalue()
 
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=[
-            prompt,
-            {
-                "inline_data": {
-                    "mime_type": "image/png",
-                    "data": image_bytes,
-                }
-            },
-        ],
-    )
-    return getattr(response, "text", None) or ""
+    try:
+        from google.genai import types
+    except Exception as exc:
+        raise RuntimeError("google-genai SDK does not expose the required types module") from exc
+
+    image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/png")
+    prompt_part = types.Part.from_text(text=prompt)
+
+    models_to_try = []
+    if GEMINI_MODEL:
+        models_to_try.append(GEMINI_MODEL)
+    if GEMINI_FALLBACK_MODEL and GEMINI_FALLBACK_MODEL != GEMINI_MODEL:
+        models_to_try.append(GEMINI_FALLBACK_MODEL)
+
+    last_error = None
+    for model_name in models_to_try:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=[prompt_part, image_part],
+            )
+            return getattr(response, "text", None) or ""
+        except Exception as exc:
+            message = str(exc).lower()
+            last_error = exc
+            if "model" in message and ("not found" in message or "unsupported" in message or "invalid" in message or "not available" in message or "not enabled" in message):
+                continue
+            break
+
+    raise RuntimeError(f"Gemini request failed: {last_error}") from last_error
 
 
 # Function to generate content
@@ -202,9 +224,11 @@ def index():
             message = str(exc)
             lowered = message.lower()
             if "quota" in lowered or "429" in message or "rate limit" in lowered or "resource exhausted" in lowered or "exceeded" in lowered:
-                return render_template('index.html', response_text="Gemini API quota or rate-limit exceeded. This can happen when the deployed environment is using the same key too often or when the account has hit its usage limit. Please try again later or use a different key/account.")
+                return render_template('index.html', response_text="Gemini API quota or rate-limit exceeded. Your deployment may be hitting the account limit. Please wait a while, reduce upload frequency, or use a higher-quota key.")
             if "api key" in lowered or "permission" in lowered or "forbidden" in lowered or "unauthorized" in lowered:
                 return render_template('index.html', response_text="Gemini API access failed. Please check your API key and permissions.")
+            if "model" in lowered and "not found" in lowered:
+                return render_template('index.html', response_text="The configured Gemini model is unavailable in your account. Please update GEMINI_MODEL to a supported model.")
             return render_template('index.html', response_text=f"The image could not be processed right now. Please try again. ({exc})", image_url=image_url)
 
         if response_text:

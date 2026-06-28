@@ -119,6 +119,29 @@ def test_gemini_errors_surface_clear_message(monkeypatch):
     assert "quota exceeded" in body.lower() or "quota" in body.lower()
 
 
+def test_call_gemini_falls_back_to_other_models(monkeypatch):
+    class FakeModels:
+        def __init__(self):
+            self.calls = []
+
+        def generate_content(self, *, model, contents):
+            self.calls.append(model)
+            if model == "gemini-2.5-flash":
+                raise RuntimeError("model not found")
+            return SimpleNamespace(text="fallback response")
+
+    class FakeClient:
+        def __init__(self):
+            self.models = FakeModels()
+
+    monkeypatch.setattr(app_module, "_get_gemini_client", lambda: FakeClient())
+    monkeypatch.setattr(app_module, "GEMINI_MODEL", "gemini-2.5-flash")
+
+    result = app_module._call_gemini("describe", Image.new("RGB", (8, 8), color="blue"))
+
+    assert result == "fallback response"
+
+
 def test_gen_image_uses_gemini_when_configured(monkeypatch):
     monkeypatch.setattr(app_module, "GOOGLE_API_KEY", "gemini-key")
     monkeypatch.setattr(app_module, "GEMINI_MODEL", "gemini-2.5-flash")
