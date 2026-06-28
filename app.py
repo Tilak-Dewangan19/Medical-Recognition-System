@@ -49,8 +49,12 @@ def _has_gemini_config(api_key=None):
     return True
 
 app = Flask(__name__)
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 app.logger.setLevel(logging.INFO)
+logger = logging.getLogger(__name__)
 
 ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tif', '.tiff', '.webp', '.dcm', '.dicom'}
 
@@ -181,6 +185,47 @@ def get_server_config():
     }
 
 
+def log_startup_config():
+    """Log startup configuration for debugging deployment issues"""
+    app.logger.info("="*60)
+    app.logger.info("STARTUP CONFIGURATION DIAGNOSTICS")
+    app.logger.info("="*60)
+    
+    # Check API Key
+    api_key = _get_gemini_api_key()
+    if api_key and _has_gemini_config(api_key):
+        app.logger.info(f"✓ Google API Key is configured (length: {len(api_key)})")
+    else:
+        app.logger.error("✗ Google API Key is NOT configured properly!")
+        app.logger.error("   - Check that GOOGLE_API_KEY environment variable is set")
+        app.logger.error("   - In local dev: add to .env file")
+        app.logger.error("   - In production: set via platform config (Heroku, Railway, etc)")
+    
+    # Check models
+    app.logger.info(f"✓ Primary model: {GEMINI_MODEL}")
+    app.logger.info(f"✓ Fallback model: {GEMINI_FALLBACK_MODEL}")
+    
+    # Check upload directory
+    try:
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        if UPLOAD_DIR.exists() and os.access(UPLOAD_DIR, os.W_OK):
+            app.logger.info(f"✓ Upload directory writable: {UPLOAD_DIR}")
+        else:
+            app.logger.warning(f"✗ Upload directory not writable: {UPLOAD_DIR}")
+    except Exception as e:
+        app.logger.error(f"✗ Failed to verify upload directory: {e}")
+    
+    # Check dependencies
+    try:
+        from google import genai
+        app.logger.info("✓ google-genai package is available")
+    except ImportError:
+        app.logger.error("✗ google-genai package NOT available - install with: pip install google-genai")
+    
+    app.logger.info("="*60)
+
+
+
 def get_analysis_prompt():
     return (
         "You are analyzing an uploaded medical image. Provide a detailed, structured medical-style description of what is visually present. "
@@ -257,8 +302,29 @@ def index():
 
     return render_template('index.html')
 
+
+# Log configuration on startup
+log_startup_config()
+
+
 if __name__ == '__main__':
     app.run(**get_server_config())
+
+
+@app.errorhandler(500)
+def handle_500_error(error):
+    app.logger.exception("Unhandled exception - 500 error")
+    message = "An unexpected error occurred. Please try again later or check your API key configuration."
+    try:
+        return render_template('index.html', response_text=message), 500
+    except Exception as render_error:
+        app.logger.exception("Failed to render error template")
+        return (
+            f"<html><body><h1>Internal Server Error</h1>"
+            f"<p>An unexpected error occurred.</p>"
+            f"<p>Error: {render_error}</p></body></html>",
+            500
+        )
 
 
 @app.errorhandler(Exception)
@@ -267,4 +333,12 @@ def handle_unexpected_error(error):
     message = "An unexpected error occurred while processing your request."
     if app.debug:
         message = f"Internal server error: {error}"
-    return render_template('index.html', response_text=message), 500
+    try:
+        return render_template('index.html', response_text=message), 500
+    except Exception as render_error:
+        app.logger.exception("Failed to render error template in exception handler")
+        return (
+            "<html><body><h1>Error</h1>"
+            f"<p>{message}</p></body></html>",
+            500
+        )
