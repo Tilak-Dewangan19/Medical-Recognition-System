@@ -130,6 +130,13 @@ def test_has_gemini_config_accepts_runtime_environment_alias(monkeypatch):
     assert app_module._has_gemini_config() is True
 
 
+def test_has_openrouter_config_accepts_runtime_environment(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "runtime-openrouter-key")
+    monkeypatch.setattr(app_module, "OPENROUTER_API_KEY", "")
+    assert app_module._has_openrouter_config() is True
+
+
 def test_upload_uses_gemini_when_configured(monkeypatch):
     client = app_module.app.test_client()
     monkeypatch.setattr(app_module, "GOOGLE_API_KEY", "fake-key")

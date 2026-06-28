@@ -32,6 +32,13 @@ OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/ap
 OPENROUTER_HTTP_REFERER = os.getenv("OPENROUTER_HTTP_REFERER", "https://openrouter.ai").strip() or "https://openrouter.ai"
 
 
+def _get_runtime_setting(name, default=""):
+    value = os.getenv(name, "").strip()
+    if value:
+        return value
+    return default
+
+
 def _get_gemini_api_key():
     module_key = (GOOGLE_API_KEY or "").strip()
     if module_key:
@@ -59,6 +66,8 @@ def _has_gemini_config(api_key=None):
 
 def _has_openrouter_config():
     api_key = (OPENROUTER_API_KEY or "").strip()
+    if not api_key:
+        api_key = _get_runtime_setting("OPENROUTER_API_KEY", "").strip()
     if not api_key:
         return False
     if api_key in {"...", "your_openrouter_key", "your_key_here", "OPENROUTER_API_KEY"}:
@@ -125,6 +134,11 @@ def _call_openrouter(prompt, image):
     if not _has_openrouter_config():
         raise RuntimeError("OpenRouter API key is not configured. Set OPENROUTER_API_KEY in the environment or .env file.")
 
+    api_key = (OPENROUTER_API_KEY or "").strip() or _get_runtime_setting("OPENROUTER_API_KEY", "").strip()
+    model_name = (OPENROUTER_MODEL or "").strip() or _get_runtime_setting("OPENROUTER_MODEL", "openai/gpt-4o-mini")
+    base_url = (OPENROUTER_BASE_URL or "").strip() or _get_runtime_setting("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+    http_referer = (OPENROUTER_HTTP_REFERER or "").strip() or _get_runtime_setting("OPENROUTER_HTTP_REFERER", "https://openrouter.ai")
+
     image_bytes = io.BytesIO()
     image.save(image_bytes, format=getattr(image, "format", None) or "PNG")
     encoded_image = base64.b64encode(image_bytes.getvalue()).decode("ascii")
@@ -133,7 +147,7 @@ def _call_openrouter(prompt, image):
         mime_type = f"image/{str(image.format).lower()}"
 
     payload = {
-        "model": OPENROUTER_MODEL,
+        "model": model_name,
         "messages": [
             {
                 "role": "system",
@@ -161,14 +175,14 @@ def _call_openrouter(prompt, image):
     }
 
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "HTTP-Referer": OPENROUTER_HTTP_REFERER,
+        "HTTP-Referer": http_referer,
         "X-Title": os.getenv("OPENROUTER_TITLE", "Medicine Recognition System"),
     }
 
     response = requests.post(
-        f"{OPENROUTER_BASE_URL}/chat/completions",
+        f"{base_url}/chat/completions",
         headers=headers,
         json=payload,
         timeout=120,
